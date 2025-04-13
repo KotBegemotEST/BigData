@@ -3,11 +3,15 @@ import json
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from sklearn.model_selection import cross_val_score
+
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
+from sklearn.utils.class_weight import compute_class_weight
 
 # Загрузка JSON-файла
-file_path = "C:/Users/Anton/Desktop/SuurAndmed/cs.json"
+file_path = "C:/Users/buket/OneDrive/Desktop/data/cs.json"
 
 with open(file_path, 'r', encoding='utf-8') as file:
     data = json.load(file)
@@ -16,6 +20,7 @@ game_rounds = data.get("gameRounds", [])
 NUM_ROUNDS = 200
 extracted_features = []
 
+# Преобразуем данные
 for rnd in game_rounds[:NUM_ROUNDS]:
     round_features = {
         "roundNum": rnd.get("roundNum"),
@@ -124,44 +129,172 @@ df['winningSide'] = df['winningSide'].map({'CT': 1, 'T': 0})
 df['buyType_CT'] = df['buyType_CT'].map({'Full Eco': 0, 'Semi Buy': 1, 'Full Buy': 2, 'Force Buy': 3, 'Unknown': -1})
 df['buyType_T'] = df['buyType_T'].map({'Full Eco': 0, 'Semi Buy': 1, 'Full Buy': 2, 'Force Buy': 3, 'Unknown': -1})
 
+# Преобразуем строковые значения в столбце 'reason' в числовые (например, 'CTWin' -> 1, 'TWin' -> 0, 'Timeout' -> -1)
+df['reason'] = df['reason'].map({'CTWin': 1, 'TWin': 0, 'Timeout': -1, 'BombDefused': 2, 'TimeExpired': 3, 'Unknown': -1})
+
+# Шаг 1: Первый эксперимент с полными данными (с убийствами и причиной завершения)
 # Разделяем данные на признаки (X) и целевую переменную (y)
-X = df.drop(['roundNum', 'winningSide'], axis=1)  # Убираем 'roundNum' и 'winningSide'
-y = df['winningSide']  # Это целевая переменная: кто выиграл раунд (CT или T)
+X_full = df.drop(['roundNum', 'winningSide'], axis=1)  # Убираем 'roundNum' и 'winningSide'
+y_full = df['winningSide']
 
 # Разделяем на обучающую и тестовую выборки (80% на обучение, 20% на тест)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train_full, X_test_full, y_train_full, y_test_full = train_test_split(X_full, y_full, test_size=0.2, random_state=42)
 
-# Обучаем модель RandomForest
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X_train, y_train)
+# Рассчитываем веса классов для улучшения балансировки данных
+class_weights = compute_class_weight('balanced', classes=np.array([0, 1]), y=y_full)
+class_weight_dict = {0: class_weights[0], 1: class_weights[1]}
+
+# Обучаем модель RandomForest с весами классов
+model_full = RandomForestClassifier(n_estimators=100, random_state=42, class_weight=class_weight_dict)
+model_full.fit(X_train_full, y_train_full)
 
 # Прогнозируем на тестовых данных
-y_pred = model.predict(X_test)
+y_pred_full = model_full.predict(X_test_full)
 
 # Оценка точности
-accuracy = accuracy_score(y_test, y_pred)
-print(f'Accuracy: {accuracy:.4f}')
+accuracy_full = accuracy_score(y_test_full, y_pred_full)
+print(f"Шаг 1: Accuracy with full features: {accuracy_full:.4f}")
 
 # Матрица ошибок
-cm = confusion_matrix(y_test, y_pred)
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['CT', 'T'], yticklabels=['CT', 'T'])
-plt.title("Confusion Matrix")
+cm_full = confusion_matrix(y_test_full, y_pred_full)
+sns.heatmap(cm_full, annot=True, fmt='d', cmap='Blues', xticklabels=['CT', 'T'], yticklabels=['CT', 'T'])
+plt.title("Confusion Matrix (Full Features)")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.show()
+
+# Шаг 2: Убираем очевидные признаки (убийства и причина завершения раунда)
+X_reduced = X_full.drop(['kills_CT', 'kills_T', 'reason'], axis=1)  # Убираем убийства и причину завершения раунда
+# Разделяем на обучающую и тестовую выборки
+X_train_reduced, X_test_reduced, y_train_reduced, y_test_reduced = train_test_split(X_reduced, y_full, test_size=0.2, random_state=42)
+
+# Обучаем модель RandomForest с весами классов
+model_reduced = RandomForestClassifier(n_estimators=100, random_state=42, class_weight=class_weight_dict)
+model_reduced.fit(X_train_reduced, y_train_reduced)
+
+# Прогнозируем на тестовых данных
+y_pred_reduced = model_reduced.predict(X_test_reduced)
+
+# Оценка точности
+accuracy_reduced = accuracy_score(y_test_reduced, y_pred_reduced)
+print(f"Шаг 2: Accuracy without kills and reason: {accuracy_reduced:.4f}")
+
+# Матрица ошибок
+cm_reduced = confusion_matrix(y_test_reduced, y_pred_reduced)
+sns.heatmap(cm_reduced, annot=True, fmt='d', cmap='Blues', xticklabels=['CT', 'T'], yticklabels=['CT', 'T'])
+plt.title("Confusion Matrix (Reduced Features)")
 plt.xlabel("Predicted")
 plt.ylabel("Actual")
 plt.show()
 
 # Дополнительно: классификационный отчет
-print(classification_report(y_test, y_pred))
+print(f"Шаг 2: Classification Report without kills and reason\n{classification_report(y_test_reduced, y_pred_reduced)}")
 
 # Важность признаков
-feature_importance = model.feature_importances_
-features = X.columns
-feature_df = pd.DataFrame({'Feature': features, 'Importance': feature_importance})
-feature_df = feature_df.sort_values(by='Importance', ascending=False)
+feature_importance_reduced = model_reduced.feature_importances_
+features_reduced = X_reduced.columns
+feature_df_reduced = pd.DataFrame({'Feature': features_reduced, 'Importance': feature_importance_reduced})
+feature_df_reduced = feature_df_reduced.sort_values(by='Importance', ascending=False)
 
 # Отображаем важность признаков
-feature_df.plot(kind='bar', x='Feature', y='Importance', legend=False, figsize=(10, 5))
-plt.title('Feature Importance')
+feature_df_reduced.plot(kind='bar', x='Feature', y='Importance', legend=False, figsize=(10, 5))
+plt.title('Feature Importance without kills and reason')
 plt.xlabel('Feature')
 plt.ylabel('Importance')
 plt.show()
+
+
+# Шаг 3: Кросс-валидация
+
+# Кросс-валидация для модели с полными признаками
+cv_scores_full = cross_val_score(model_full, X_full, y_full, cv=5, scoring='accuracy')
+print(f"Шаг 3: Cross-validation scores with full features: {cv_scores_full}")
+print(f"Среднее значение точности с полными признаками: {cv_scores_full.mean():.4f}")
+
+# Кросс-валидация для модели с уменьшенными признаками
+cv_scores_reduced = cross_val_score(model_reduced, X_reduced, y_full, cv=5, scoring='accuracy')
+print(f"Шаг 3: Cross-validation scores without kills and reason: {cv_scores_reduced}")
+print(f"Среднее значение точности без убийств и причины завершения: {cv_scores_reduced.mean():.4f}")
+
+
+
+import xgboost as xgb
+from xgboost import XGBClassifier
+
+# Шаг 4: Использование XGBoost
+
+# Кросс-валидация для модели с полными признаками (XGBoost)
+model_xgb_full = XGBClassifier(random_state=42, scale_pos_weight=class_weight_dict[1]/class_weight_dict[0])
+model_xgb_full.fit(X_train_full, y_train_full)
+
+# Прогнозируем на тестовых данных
+y_pred_xgb_full = model_xgb_full.predict(X_test_full)
+
+# Оценка точности
+accuracy_xgb_full = accuracy_score(y_test_full, y_pred_xgb_full)
+print(f"Шаг 4: Accuracy with full features using XGBoost: {accuracy_xgb_full:.4f}")
+
+# Матрица ошибок
+cm_xgb_full = confusion_matrix(y_test_full, y_pred_xgb_full)
+sns.heatmap(cm_xgb_full, annot=True, fmt='d', cmap='Blues', xticklabels=['CT', 'T'], yticklabels=['CT', 'T'])
+plt.title("Confusion Matrix (XGBoost with Full Features)")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.show()
+
+# Дополнительно: классификационный отчет
+print(f"Шаг 4: Classification Report using XGBoost with full features\n{classification_report(y_test_full, y_pred_xgb_full)}")
+
+# Важность признаков для XGBoost
+feature_importance_xgb_full = model_xgb_full.feature_importances_
+features_full = X_full.columns
+feature_df_xgb_full = pd.DataFrame({'Feature': features_full, 'Importance': feature_importance_xgb_full})
+feature_df_xgb_full = feature_df_xgb_full.sort_values(by='Importance', ascending=False)
+
+# Отображаем важность признаков для XGBoost
+feature_df_xgb_full.plot(kind='bar', x='Feature', y='Importance', legend=False, figsize=(10, 5))
+plt.title('Feature Importance with XGBoost (Full Features)')
+plt.xlabel('Feature')
+plt.ylabel('Importance')
+plt.show()
+
+# Кросс-валидация для модели с уменьшенными признаками (XGBoost)
+model_xgb_reduced = XGBClassifier(random_state=42, scale_pos_weight=class_weight_dict[1]/class_weight_dict[0])
+model_xgb_reduced.fit(X_train_reduced, y_train_reduced)
+
+# Прогнозируем на тестовых данных
+y_pred_xgb_reduced = model_xgb_reduced.predict(X_test_reduced)
+
+# Оценка точности
+accuracy_xgb_reduced = accuracy_score(y_test_reduced, y_pred_xgb_reduced)
+print(f"Шаг 4: Accuracy without kills and reason using XGBoost: {accuracy_xgb_reduced:.4f}")
+
+# Матрица ошибок
+cm_xgb_reduced = confusion_matrix(y_test_reduced, y_pred_xgb_reduced)
+sns.heatmap(cm_xgb_reduced, annot=True, fmt='d', cmap='Blues', xticklabels=['CT', 'T'], yticklabels=['CT', 'T'])
+plt.title("Confusion Matrix (XGBoost without Kills and Reason)")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.show()
+
+# Дополнительно: классификационный отчет
+print(f"Шаг 4: Classification Report using XGBoost without kills and reason\n{classification_report(y_test_reduced, y_pred_xgb_reduced)}")
+
+# Важность признаков для XGBoost с уменьшенными признаками
+feature_importance_xgb_reduced = model_xgb_reduced.feature_importances_
+features_reduced = X_reduced.columns
+feature_df_xgb_reduced = pd.DataFrame({'Feature': features_reduced, 'Importance': feature_importance_xgb_reduced})
+feature_df_xgb_reduced = feature_df_xgb_reduced.sort_values(by='Importance', ascending=False)
+
+# Отображаем важность признаков для XGBoost с уменьшенными признаками
+feature_df_xgb_reduced.plot(kind='bar', x='Feature', y='Importance', legend=False, figsize=(10, 5))
+plt.title('Feature Importance with XGBoost (Reduced Features)')
+plt.xlabel('Feature')
+plt.ylabel('Importance')
+plt.show()
+
+# Кросс-валидация для модели с уменьшенными признаками (XGBoost)
+cv_scores_xgb_reduced = cross_val_score(model_xgb_reduced, X_reduced, y_full, cv=5, scoring='accuracy')
+print(f"Шаг 4: Cross-validation scores without kills and reason (XGBoost): {cv_scores_xgb_reduced}")
+print(f"Среднее значение точности без убийств и причины завершения с XGBoost: {cv_scores_xgb_reduced.mean():.4f}")
+
